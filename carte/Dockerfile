@@ -1,0 +1,75 @@
+# ComfyUI déjà installé, pour la carte louée — 24/10 (CF23 ; Olivier : « ton idée de docker est la bonne
+# solution oui » ; étude : notes/etude-image-docker-24-10.md).
+#
+# Écrite dans tools/pod/image/ du projet, déplacée ici le 25/10 (PA55.3) : c'est ce dépôt que GitHub
+# construit. Elle sert deux fois — telle quelle pour la carte, et comme base du socle à la requête
+# (socle/Dockerfile).
+#
+# CE QUI EST DEDANS : ce que tools/pod/installer.sh pose aujourd'hui sur la carte, sauf les poids —
+# ComfyUI et l'extension de contrôle de Krea 2, tous deux à un commit fixé, et les bibliothèques
+# Python qu'ils demandent, torch épinglé à celui de l'image de base. Ni poids, ni clé, ni rien de
+# nous : l'image est publique. Les poids descendent sur le disque de la machine à chaque allumage
+# (installeur, .part puis renommage) et ComfyUI les voit arriver sans redémarrer.
+#
+# LA BASE est celle que `tools/pod.sh creer` loue déjà (POD_IMAGE par défaut) : même CUDA 13, même
+# PyTorch, même serveur SSH de RunPod. Rien ne change pour la carte, sauf qu'il n'y a plus rien à poser.
+#
+# ComfyUI vit dans /opt/ComfyUI, hors de /workspace : le volume réseau, quand il y en a un, se monte
+# sur /workspace et masquerait ce qui y serait.
+# LA BASE se choisit à la construction (30/10, PA55) : CUDA 13 par défaut ; la variante « cu128 » (même PyTorch 2.9.1, CUDA
+# 12.8.1, pilote 570 ou plus) pour le tir à la demande, qui n'obtient aucun serveur filtré en CUDA 13.0 (deux soirs).
+ARG BASE=runpod/pytorch:1.1.0-cu1300-torch291-ubuntu2404
+FROM ${BASE}
+
+# Le commit de ComfyUI : celui qui tire sur la carte, relevé sur le volume d'Islande le 24/10 au soir
+# (0.41.3, du 17/10 ; Klein et H3 y ont tiré le 24/10). Une image construite sur la pointe du dépôt ne
+# se reproduit pas.
+ARG COMFY_COMMIT=8713616fcc321624e306bbd36be5906203dcb0dc
+# L'extension de profondeur de Krea 2 : le commit contrôlé le 12/10 (installer.sh, KREA_CN_COMMIT).
+ARG KREA_CN_DEPOT=facok/comfyui-krea2-controlnet
+ARG KREA_CN_COMMIT=79ebfd3bd80d2180b334dd7ce57f3c9ddaa0848f
+
+RUN test -n "$COMFY_COMMIT" || { echo "COMFY_COMMIT manque" >&2; exit 1; }
+
+# aria2 : l'installeur descend les poids avec, en seize connexions (85 Mo/s depuis Hugging Face).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends aria2 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+RUN git init -q ComfyUI \
+ && cd ComfyUI \
+ && git remote add origin https://github.com/comfyanonymous/ComfyUI.git \
+ && git fetch -q --depth 1 origin "$COMFY_COMMIT" \
+ && git checkout -q FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "$COMFY_COMMIT"
+
+# Les bibliothèques de ComfyUI — le même ordre que l'installeur, pour les mêmes raisons (installer.sh,
+# 25/08 et 04/09) : torch épinglé à celui de l'image, torchvision posé d'abord, seul, depuis l'index
+# PyTorch de son CUDA, puis épinglé à son tour ; ensuite seulement requirements.txt.
+WORKDIR /opt/ComfyUI
+RUN set -e; \
+    CU=$(python3 -c "import torch;print(torch.version.cuda or '')"); \
+    IDX="https://download.pytorch.org/whl/cu$(echo "$CU" | tr -d '.')"; \
+    echo "torch==$(python3 -c "import torch;print(torch.__version__.split('+')[0])")" > /tmp/contrainte.txt; \
+    pip install -q --no-cache-dir --break-system-packages torchvision --constraint /tmp/contrainte.txt --index-url "$IDX"; \
+    echo "torchvision==$(python3 -c "import torchvision;print(torchvision.__version__.split('+')[0])")" >> /tmp/contrainte.txt; \
+    pip install -q --no-cache-dir --break-system-packages -r requirements.txt \
+        --constraint /tmp/contrainte.txt --extra-index-url "$IDX"; \
+    cp /tmp/contrainte.txt /opt/contrainte-torch.txt; \
+    python3 -c "import torch, torchvision; print('torch', torch.__version__, 'torchvision', torchvision.__version__)"
+
+# L'extension de contrôle de Krea 2 : deux fichiers Python, ni install.py ni requirements.txt
+# (contrôlée le 12/10, notes/chaine-qwen-depth-carte-12-10.md).
+RUN git init -q "custom_nodes/$(basename "$KREA_CN_DEPOT")" \
+ && cd "custom_nodes/$(basename "$KREA_CN_DEPOT")" \
+ && git remote add origin "https://github.com/$KREA_CN_DEPOT.git" \
+ && git fetch -q --depth 1 origin "$KREA_CN_COMMIT" \
+ && git checkout -q FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "$KREA_CN_COMMIT"
+
+# Ce que l'image porte, lisible sur la machine sans rien lancer : `cat /opt/IMAGE`.
+RUN printf 'comfyui %s\nkrea2-controlnet %s\n' "$COMFY_COMMIT" "$KREA_CN_COMMIT" > /opt/IMAGE \
+ && cat /opt/contrainte-torch.txt >> /opt/IMAGE
+
+LABEL org.opencontainers.image.description="ComfyUI preinstalled on the RunPod CUDA 13 PyTorch base, no weights"

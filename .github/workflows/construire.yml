@@ -1,0 +1,163 @@
+# Construire les images, chez GitHub et non chez le loueur (01/09, refait le 25/10 pour PA55.3).
+#
+# CE QUI SORT, sur le registre de GitHub, étiqueté par les 7 premiers caractères du commit de ComfyUI :
+#   comfyui-carte      ComfyUI déjà installé, sans poids — la carte louée (carte/Dockerfile)
+#   serverless-socle   la même, plus le gestionnaire de RunPod — sans poids (socle/Dockerfile)
+#   serverless-<nom>   le socle plus les poids d'UN service : krea2, h3, klein (services/<nom>/Dockerfile)
+# Un paquet lié à ce dépôt public naît PUBLIC (vu le 25/10). Les images à poids (serverless-<nom>) se passent
+# en PRIVÉ dès leur première construction (Package settings → Change visibility) : les licences de H3 et de
+# Krea 2 interdisent de publier les poids. Elles restent privées aux constructions suivantes. comfyui-carte
+# reste publique : aucun poids, et la carte la tire sans clé.
+#
+# POURQUOI CHEZ GITHUB : le constructeur de RunPod coupe à trente minutes ; RunPod construit lui-même ses
+# images à modèles inclus ailleurs. Le dépôt est public : les minutes de construction ne coûtent rien.
+#
+# LE DISQUE EST LE SEUL RISQUE : une machine gratuite a une trentaine de Go libres à la racine. On fait le
+# ménage et on déplace le stockage de Docker sur /mnt, le grand disque — c'est ce qui a fait passer les
+# 52,8 Go de septembre. L'espace est affiché avant et après : si ça casse, c'est là qu'on le verra.
+#
+# Se lance à la main (Actions → Construire les images → Run workflow).
+
+name: Construire les images
+
+on:
+  workflow_dispatch:
+    inputs:
+      comfy_commit:
+        description: "Commit de ComfyUI (SHA complet) — celui de la carte"
+        required: true
+        default: "8713616fcc321624e306bbd36be5906203dcb0dc"
+      services:
+        description: 'Services à construire, en JSON — ["krea2","h3","klein"] ; [] pour la carte et le socle seuls'
+        required: true
+        default: '["krea2","h3"]'
+      variante:
+        # 30/10 (PA55) : « cu128 » construit la carte et le socle sur PyTorch CUDA 12.8 (comfyui-carte-cu128,
+        # serverless-socle-cu128) ; les services se nomment alors avec leur variante, ex. ["h3-cu128"]. Vide : CUDA 13.
+        description: 'Variante de la base : vide (CUDA 13) ou cu128'
+        required: false
+        default: ''
+        type: choice
+        options: ['', 'cu128']
+      bases:
+        # 30/10 : non = ne reconstruit pas la carte ni le socle, déjà sur le registre ; les services partent de ceux-là.
+        description: 'Reconstruire la carte et le socle (sinon : ceux du registre)'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  socle:
+    runs-on: ubuntu-latest
+    outputs:
+      court: ${{ steps.tag.outputs.court }}
+      suffixe: ${{ steps.tag.outputs.suffixe }}
+    steps:
+      - name: Faire de la place, et Docker sur le grand disque
+        # Commandes explicites plutôt qu'une action tierce : on lit ce qu'on exécute (règle du 22/08).
+        run: |
+          df -h / /mnt
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+                      /usr/local/share/powershell /usr/share/swift "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune --all --force || true
+          sudo mkdir -p /mnt/docker
+          sudo systemctl stop docker
+          echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          df -h / /mnt
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        run: |
+          echo "court=$(echo '${{ inputs.comfy_commit }}' | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          echo "proprio=$(echo '${{ github.repository_owner }}' | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
+          case '${{ inputs.variante }}' in
+            '')    echo "suffixe=" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.1.0-cu1300-torch291-ubuntu2404" >> "$GITHUB_OUTPUT" ;;
+            cu128) echo "suffixe=-cu128" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.5.1-cu1281-torch291-ubuntu2404" >> "$GITHUB_OUTPUT" ;;
+            *)     echo "variante inconnue : ${{ inputs.variante }}" >&2; exit 1 ;;
+          esac
+      - name: La carte
+        if: ${{ inputs.bases }}
+        uses: docker/build-push-action@v6
+        with:
+          context: carte
+          build-args: |
+            COMFY_COMMIT=${{ inputs.comfy_commit }}
+            BASE=${{ steps.tag.outputs.base }}
+          push: true
+          provenance: false
+          # Le lien au dépôt : sans lui, le jeton de ce travail ne peut pas relire le paquet privé.
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          # « latest » ne désigne que la variante CUDA 13 : la carte louée la prend par défaut.
+          tags: |
+            ghcr.io/${{ steps.tag.outputs.proprio }}/comfyui-carte${{ steps.tag.outputs.suffixe }}:${{ steps.tag.outputs.court }}
+            ${{ steps.tag.outputs.suffixe == '' && format('ghcr.io/{0}/comfyui-carte:latest', steps.tag.outputs.proprio) || '' }}
+      - name: Le socle à la requête
+        if: ${{ inputs.bases }}
+        uses: docker/build-push-action@v6
+        with:
+          context: socle
+          build-args: CARTE=ghcr.io/${{ steps.tag.outputs.proprio }}/comfyui-carte${{ steps.tag.outputs.suffixe }}:${{ steps.tag.outputs.court }}
+          push: true
+          provenance: false
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: ghcr.io/${{ steps.tag.outputs.proprio }}/serverless-socle${{ steps.tag.outputs.suffixe }}:${{ steps.tag.outputs.court }}
+      - name: Espace disque à l'arrivée
+        if: always()
+        run: df -h / /mnt
+
+  services:
+    needs: socle
+    if: ${{ inputs.services != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(inputs.services) }}
+    steps:
+      - name: Faire de la place, et Docker sur le grand disque
+        # Commandes explicites plutôt qu'une action tierce : on lit ce qu'on exécute (règle du 22/08).
+        run: |
+          df -h / /mnt
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost \
+                      /usr/local/share/powershell /usr/share/swift "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune --all --force || true
+          sudo mkdir -p /mnt/docker
+          sudo systemctl stop docker
+          echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl start docker
+          df -h / /mnt
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        run: echo "proprio=$(echo '${{ github.repository_owner }}' | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
+      # push: true envoie les couches au fil de l'eau, au lieu de garder l'image entière sur le disque.
+      - name: Le service ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: services/${{ matrix.service }}
+          build-args: SOCLE=ghcr.io/${{ steps.tag.outputs.proprio }}/serverless-socle${{ needs.socle.outputs.suffixe }}:${{ needs.socle.outputs.court }}
+          # Nos modules (services/picture) descendent d'un dépôt Hugging Face privé : le jeton en lecture, jamais dans une couche.
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
+          push: true
+          provenance: false
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: ghcr.io/${{ steps.tag.outputs.proprio }}/serverless-${{ matrix.service }}:${{ needs.socle.outputs.court }}
+      - name: Espace disque à l'arrivée
+        if: always()
+        run: df -h / /mnt
