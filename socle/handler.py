@@ -806,6 +806,24 @@ def get_image_data(filename, subfolder, image_type):
         return None
 
 
+# AmbientLoop (30/10, the finance : « qu'on sache si on tire à froid ou à chaud, et le coût selon la carte ») : what only the
+# worker sees — its rank since the process started, the time from start to this job, each node's time (loaders apart, on
+# the client side), the nodes ComfyUI had cached, the card as the worker sees it (a MIG slice is half a PRO 6000).
+_DEBUT_PROCESSUS = time.time()
+_TRAVAUX = 0
+
+
+def _carte_vue():
+    try:
+        import subprocess
+        sortie = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                                capture_output=True, text=True, timeout=10).stdout.strip().splitlines()
+        nom, memoire = [x.strip() for x in sortie[0].split(",")[:2]]
+        return {"nom": nom, "memoire_mo": int(float(memoire)), "mig": "MIG" in nom or os.path.exists("/proc/driver/nvidia/capabilities/mig")}
+    except Exception as e:
+        return {"erreur": str(e)[:200]}
+
+
 def handler(job):
     """
     Handles a job using ComfyUI via websockets for status and image retrieval.
@@ -824,6 +842,11 @@ def handler(job):
 
     job_input = job["input"]
     job_id = job["id"]
+    global _TRAVAUX
+    _TRAVAUX += 1
+    mesure = {"rang": _TRAVAUX, "depuis_demarrage_s": round(time.time() - _DEBUT_PROCESSUS, 1), "noeuds_ms": {},
+              "en_cache": [], "carte": _carte_vue()}
+    noeud_courant, noeud_depuis = None, None
 
     # Make sure that the input is valid
     validated_data, error_message = validate_input(job_input)
@@ -915,8 +938,16 @@ def handler(job):
                         print(
                             f"worker-comfyui - Status update: {status_data.get('exec_info', {}).get('queue_remaining', 'N/A')} items remaining in queue"
                         )
+                    elif message.get("type") == "execution_cached":
+                        data = message.get("data", {})
+                        if data.get("prompt_id") == prompt_id:
+                            mesure["en_cache"] = [str(n) for n in data.get("nodes") or []]
                     elif message.get("type") == "executing":
                         data = message.get("data", {})
+                        if data.get("prompt_id") == prompt_id:
+                            if noeud_courant is not None:
+                                mesure["noeuds_ms"][str(noeud_courant)] = round((time.time() - noeud_depuis) * 1000)
+                            noeud_courant, noeud_depuis = data.get("node"), time.time()
                         if (
                             data.get("node") is None
                             and data.get("prompt_id") == prompt_id
@@ -1119,6 +1150,7 @@ def handler(job):
     final_result = {}
 
     # AmbientLoop (30/10): where the job ran, for the H3 licence — the paid production on Lotus has no GraphQL to ask.
+    final_result["mesure"] = mesure
     final_result["machine"] = {"centre": os.environ.get("RUNPOD_DC_ID", ""), "ouvrier": os.environ.get("RUNPOD_POD_ID", ""),
                                "carte": os.environ.get("RUNPOD_GPU_NAME", "") or os.environ.get("RUNPOD_GPU_TYPE_ID", "")}
 
