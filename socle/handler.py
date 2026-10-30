@@ -1118,6 +1118,10 @@ def handler(job):
 
     final_result = {}
 
+    # AmbientLoop (30/10): where the job ran, for the H3 licence — the paid production on Lotus has no GraphQL to ask.
+    final_result["machine"] = {"centre": os.environ.get("RUNPOD_DC_ID", ""), "ouvrier": os.environ.get("RUNPOD_POD_ID", ""),
+                               "carte": os.environ.get("RUNPOD_GPU_NAME", "") or os.environ.get("RUNPOD_GPU_TYPE_ID", "")}
+
     if output_data:
         final_result["images"] = output_data
 
