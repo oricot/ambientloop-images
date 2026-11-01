@@ -45,6 +45,12 @@ on:
         required: false
         default: true
         type: boolean
+      etiquette:
+        # 01/11 (go 278A) : une image de service qui change de contenu sans changer de ComfyUI garde l'ancienne sous son nom, le
+        # retour arrière, et aucune machine neuve ne tire la nouvelle avant le pointage. Vide : l'étiquette habituelle.
+        description: 'Suffixe de l étiquette des services, ex. -sans-qwen → serverless-picture:8713616-sans-qwen'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -157,7 +163,7 @@ jobs:
           push: true
           provenance: false
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
-          tags: ghcr.io/${{ steps.tag.outputs.proprio }}/serverless-${{ matrix.service }}:${{ needs.socle.outputs.court }}
+          tags: ghcr.io/${{ steps.tag.outputs.proprio }}/serverless-${{ matrix.service }}:${{ needs.socle.outputs.court }}${{ inputs.etiquette }}
       - name: Espace disque à l'arrivée
         if: always()
         run: df -h / /mnt
