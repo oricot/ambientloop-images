@@ -68,8 +68,27 @@ RUN git init -q "custom_nodes/$(basename "$KREA_CN_DEPOT")" \
  && git checkout -q FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "$KREA_CN_COMMIT"
 
+# SAGEATTENTION 2.2, FOR THE H100's TRIAL ONLY (variante « sage », 08/11, EN-13 ; Olivier 08/11 17:58 : « oui ok , construit une
+# version de notre image avec SageAttention ») : empty SAGE_COMMIT, nothing changes (the production image). Set : thu-ml/SageAttention
+# at its v2.2.0 commit, compiled for Hopper only (sm90, the H100 ; TORCH_CUDA_ARCH_LIST works without a GPU), few jobs for the
+# builder's memory. Checked before (CLAUDE.md, 22/08) : Apache-2.0, its setup.py calls only `nvcc -V` and PyTorch's CUDA
+# compilation — nothing downloaded, nothing read outside its folder. ComfyUI uses it with its own flag --use-sage-attention.
+ARG SAGE_COMMIT=
+RUN if [ -n "$SAGE_COMMIT" ]; then set -e; \
+      pip install -q --no-cache-dir --break-system-packages ninja --constraint /opt/contrainte-torch.txt; \
+      git init -q /opt/SageAttention && cd /opt/SageAttention \
+      && git remote add origin https://github.com/thu-ml/SageAttention.git \
+      && git fetch -q --depth 1 origin "$SAGE_COMMIT" && git checkout -q FETCH_HEAD \
+      && test "$(git rev-parse HEAD)" = "$SAGE_COMMIT"; \
+      TORCH_CUDA_ARCH_LIST="9.0" MAX_JOBS=2 EXT_PARALLEL=1 NVCC_APPEND_FLAGS="--threads 2" \
+        pip install -q --no-cache-dir --break-system-packages --no-build-isolation . --constraint /opt/contrainte-torch.txt; \
+      pip show sageattention | head -2; \
+      ls "$(python3 -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"/sageattention/ | grep -c sm90; \
+      cd /opt && rm -rf /opt/SageAttention; \
+    fi
+
 # Ce que l'image porte, lisible sur la machine sans rien lancer : `cat /opt/IMAGE`.
-RUN printf 'comfyui %s\nkrea2-controlnet %s\n' "$COMFY_COMMIT" "$KREA_CN_COMMIT" > /opt/IMAGE \
+RUN printf 'comfyui %s\nkrea2-controlnet %s\nsageattention %s\n' "$COMFY_COMMIT" "$KREA_CN_COMMIT" "${SAGE_COMMIT:-aucun}" > /opt/IMAGE \
  && cat /opt/contrainte-torch.txt >> /opt/IMAGE
 
 LABEL org.opencontainers.image.description="ComfyUI preinstalled on the RunPod CUDA 13 PyTorch base, no weights"

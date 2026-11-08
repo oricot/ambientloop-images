@@ -34,11 +34,13 @@ on:
       variante:
         # 30/10 (PA55) : « cu128 » construit la carte et le socle sur PyTorch CUDA 12.8 (comfyui-carte-cu128,
         # serverless-socle-cu128) ; les services se nomment alors avec leur variante, ex. ["h3-cu128"]. Vide : CUDA 13.
-        description: 'Variante de la base : vide (CUDA 13) ou cu128'
+        # 08/11 (EN-13) : « sage » construit la carte CUDA 13 avec SageAttention 2.2 compilé pour la H100 (comfyui-carte-sage), pour
+        # l'essai seulement ; ni socle ni services sur elle ; « latest » n'est pas déplacé.
+        description: 'Variante de la base : vide (CUDA 13), cu128, ou sage (CUDA 13 + SageAttention 2.2 pour H100)'
         required: false
         default: ''
         type: choice
-        options: ['', 'cu128']
+        options: ['', 'cu128', 'sage']
       bases:
         # 30/10 : non = ne reconstruit pas la carte ni le socle, déjà sur le registre ; les services partent de ceux-là.
         description: 'Reconstruire la carte et le socle (sinon : ceux du registre)'
@@ -89,6 +91,8 @@ jobs:
           case '${{ inputs.variante }}' in
             '')    echo "suffixe=" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.1.0-cu1300-torch291-ubuntu2404" >> "$GITHUB_OUTPUT" ;;
             cu128) echo "suffixe=-cu128" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.5.1-cu1281-torch291-ubuntu2404" >> "$GITHUB_OUTPUT" ;;
+            sage)  echo "suffixe=-sage" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.1.0-cu1300-torch291-ubuntu2404" >> "$GITHUB_OUTPUT"
+                   echo "sage=eb615cf6cf4d221338033340ee2de1c37fbdba4a" >> "$GITHUB_OUTPUT" ;;   # thu-ml/SageAttention v2.2.0
             *)     echo "variante inconnue : ${{ inputs.variante }}" >&2; exit 1 ;;
           esac
       - name: La carte
@@ -99,6 +103,7 @@ jobs:
           build-args: |
             COMFY_COMMIT=${{ inputs.comfy_commit }}
             BASE=${{ steps.tag.outputs.base }}
+            SAGE_COMMIT=${{ steps.tag.outputs.sage }}
           push: true
           provenance: false
           # Le lien au dépôt : sans lui, le jeton de ce travail ne peut pas relire le paquet privé.
@@ -108,7 +113,7 @@ jobs:
             ghcr.io/${{ steps.tag.outputs.proprio }}/comfyui-carte${{ steps.tag.outputs.suffixe }}:${{ steps.tag.outputs.court }}
             ${{ steps.tag.outputs.suffixe == '' && format('ghcr.io/{0}/comfyui-carte:latest', steps.tag.outputs.proprio) || '' }}
       - name: Le socle à la requête
-        if: ${{ inputs.bases }}
+        if: ${{ inputs.bases && inputs.variante != 'sage' }}
         uses: docker/build-push-action@v6
         with:
           context: socle
