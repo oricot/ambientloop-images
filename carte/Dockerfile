@@ -82,7 +82,7 @@ RUN if [ -n "$SAGE_COMMIT" ]; then set -e; \
       && test "$(git rev-parse HEAD)" = "$SAGE_COMMIT"; \
       TORCH_CUDA_ARCH_LIST="9.0" MAX_JOBS=2 EXT_PARALLEL=1 NVCC_APPEND_FLAGS="--threads 2" \
         pip install -q --no-cache-dir --break-system-packages --no-build-isolation . --constraint /opt/contrainte-torch.txt; \
-      pip show sageattention | head -2; \
+      pip show sageattention > /tmp/sage.txt && sed -n 1,2p /tmp/sage.txt; \
       ls "$(python3 -c 'import sysconfig;print(sysconfig.get_paths()["purelib"])')"/sageattention/ | grep -c sm90; \
       cd /opt && rm -rf /opt/SageAttention; \
     fi
