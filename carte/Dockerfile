@@ -87,8 +87,33 @@ RUN if [ -n "$SAGE_COMMIT" ]; then set -e; \
       cd /opt && rm -rf /opt/SageAttention; \
     fi
 
+# MUSUBI-TUNER, TO TRAIN THE KREA 2 MODULE ON OUR CARD (variante « entrainement », 09/11, VS61 ; Olivier 09/11 : « on fait les premier
+# tests sur une H100 si on trouve un prix inférieru a 1euro ou une RTX pro 6000 » ; notes/finance/module-sur-notre-carte-09-11.md) :
+# empty MUSUBI_COMMIT, nothing changes. Set : kohya-ss/musubi-tuner at a fixed commit (0.3.6, 27/09), in its own environment
+# /opt/musubi/.venv that sees the system's torch (--system-site-packages, torch pinned by /opt/contrainte-torch.txt) and takes its
+# own pinned libraries (transformers, diffusers, accelerate…) without touching ComfyUI's. Checked before (CLAUDE.md, 22/08) :
+# Apache-2.0 ; no setup.py nor install script (hatchling) ; in the Krea 2 path (krea2_*.py, krea2/, networks/lora_krea2.py,
+# hv_train_network.py), nothing sent out — the only uploads are behind --huggingface_repo_id, never passed ; the only download is
+# the Qwen3-VL-4B tokenizer (public), fetched HERE at a fixed revision so the card runs offline (HF_HUB_OFFLINE=1). No weights :
+# the card fetches Krea 2 Raw from the open copy (tools/pod/entrainer.sh), checked by its hash. Run by tools/pod/entrainer.sh.
+ARG MUSUBI_COMMIT=
+ARG QWEN_TOKENIZER_REV=ebb281ec70b05090aa6165b016eac8ec08e71b17
+RUN if [ -n "$MUSUBI_COMMIT" ]; then set -e; \
+      git init -q /opt/musubi && cd /opt/musubi \
+      && git remote add origin https://github.com/kohya-ss/musubi-tuner.git \
+      && git fetch -q --depth 1 origin "$MUSUBI_COMMIT" && git checkout -q FETCH_HEAD \
+      && test "$(git rev-parse HEAD)" = "$MUSUBI_COMMIT"; \
+      python3 -m venv --system-site-packages /opt/musubi/.venv; \
+      /opt/musubi/.venv/bin/pip install -q --no-cache-dir -e . --constraint /opt/contrainte-torch.txt; \
+      HF_HOME=/opt/musubi/hf /opt/musubi/.venv/bin/python -c "from huggingface_hub import snapshot_download as s; \
+s('Qwen/Qwen3-VL-4B-Instruct', revision='$QWEN_TOKENIZER_REV', allow_patterns=['*.json', '*.txt', '*.jinja'])"; \
+      /opt/musubi/.venv/bin/python -c "import torch, transformers, diffusers, accelerate; \
+import musubi_tuner.krea2_train_network; print('musubi ok', torch.__version__, transformers.__version__)"; \
+      rm -rf /opt/musubi/.git; \
+    fi
+
 # Ce que l'image porte, lisible sur la machine sans rien lancer : `cat /opt/IMAGE`.
-RUN printf 'comfyui %s\nkrea2-controlnet %s\nsageattention %s\n' "$COMFY_COMMIT" "$KREA_CN_COMMIT" "${SAGE_COMMIT:-aucun}" > /opt/IMAGE \
+RUN printf 'comfyui %s\nkrea2-controlnet %s\nsageattention %s\nmusubi-tuner %s\n' "$COMFY_COMMIT" "$KREA_CN_COMMIT" "${SAGE_COMMIT:-aucun}" "${MUSUBI_COMMIT:-aucun}" > /opt/IMAGE \
  && cat /opt/contrainte-torch.txt >> /opt/IMAGE
 
 LABEL org.opencontainers.image.description="ComfyUI preinstalled on the RunPod CUDA 13 PyTorch base, no weights"
