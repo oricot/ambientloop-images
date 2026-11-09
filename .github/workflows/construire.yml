@@ -34,15 +34,14 @@ on:
       variante:
         # 30/10 (PA55) : « cu128 » construit la carte et le socle sur PyTorch CUDA 12.8 (comfyui-carte-cu128,
         # serverless-socle-cu128) ; les services se nomment alors avec leur variante, ex. ["h3-cu128"]. Vide : CUDA 13.
-        # 08/11 (EN-13) : « sage » construit la carte CUDA 13 avec SageAttention 2.2 compilé pour la H100 (comfyui-carte-sage), pour
-        # l'essai seulement ; ni socle ni services sur elle ; « latest » n'est pas déplacé.
+        # 08/11 (EN-13) : « sage » (SageAttention 2.2) — retirée le 09/11 : du bruit pur en INT8 puis en FP8 ; Olivier « On clot le sujet ».
         # 09/11 (VS61) : « entrainement » construit la carte CUDA 13 avec musubi-tuner (l'entraînement du module Krea 2 sur notre carte,
         # tools/pod/entrainer.sh) ; ni socle ni services sur elle ; « latest » n'est pas déplacé.
-        description: 'Variante de la base : vide (CUDA 13), cu128, sage (CUDA 13 + SageAttention 2.2 pour H100) ou entrainement (CUDA 13 + musubi-tuner)'
+        description: 'Variante de la base : vide (CUDA 13), cu128 ou entrainement (CUDA 13 + musubi-tuner)'
         required: false
         default: ''
         type: choice
-        options: ['', 'cu128', 'sage', 'entrainement']
+        options: ['', 'cu128', 'entrainement']
       bases:
         # 30/10 : non = ne reconstruit pas la carte ni le socle, déjà sur le registre ; les services partent de ceux-là.
         description: 'Reconstruire la carte et le socle (sinon : ceux du registre)'
@@ -93,8 +92,6 @@ jobs:
           case '${{ inputs.variante }}' in
             '')    echo "suffixe=" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.1.0-cu1300-torch291-ubuntu2404" >> "$GITHUB_OUTPUT" ;;
             cu128) echo "suffixe=-cu128" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.5.1-cu1281-torch291-ubuntu2404" >> "$GITHUB_OUTPUT" ;;
-            sage)  echo "suffixe=-sage" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.1.0-cu1300-torch291-ubuntu2404" >> "$GITHUB_OUTPUT"
-                   echo "sage=eb615cf6cf4d221338033340ee2de1c37fbdba4a" >> "$GITHUB_OUTPUT" ;;   # thu-ml/SageAttention v2.2.0
             entrainement) echo "suffixe=-entrainement" >> "$GITHUB_OUTPUT"; echo "base=runpod/pytorch:1.1.0-cu1300-torch291-ubuntu2404" >> "$GITHUB_OUTPUT"
                    echo "musubi=f8a1b03794a49239a3539015075f5123d6c07d66" >> "$GITHUB_OUTPUT" ;;   # kohya-ss/musubi-tuner 0.3.6
             *)     echo "variante inconnue : ${{ inputs.variante }}" >&2; exit 1 ;;
@@ -107,7 +104,6 @@ jobs:
           build-args: |
             COMFY_COMMIT=${{ inputs.comfy_commit }}
             BASE=${{ steps.tag.outputs.base }}
-            SAGE_COMMIT=${{ steps.tag.outputs.sage }}
             MUSUBI_COMMIT=${{ steps.tag.outputs.musubi }}
           push: true
           provenance: false
@@ -118,7 +114,7 @@ jobs:
             ghcr.io/${{ steps.tag.outputs.proprio }}/comfyui-carte${{ steps.tag.outputs.suffixe }}:${{ steps.tag.outputs.court }}
             ${{ steps.tag.outputs.suffixe == '' && format('ghcr.io/{0}/comfyui-carte:latest', steps.tag.outputs.proprio) || '' }}
       - name: Le socle à la requête
-        if: ${{ inputs.bases && inputs.variante != 'sage' && inputs.variante != 'entrainement' }}
+        if: ${{ inputs.bases && inputs.variante != 'entrainement' }}
         uses: docker/build-push-action@v6
         with:
           context: socle
